@@ -28,12 +28,27 @@ service.endpoints.foreach { endpoint =>
 
 #### Template Syntax
 
-The generator uses Mustache-style `{{variable}}` syntax for template variables:
+The generator supports multiple template syntax styles:
 
+**Mustache-style** (default): `{{variable}}`
 ```bash
 curl -X POST '{{host}}/users' \
   -H 'Content-Type: application/json' \
   -d '{"name": "{{name}}", "email": "{{email}}", "age": {{age}}}'
+```
+
+**Shell-style**: `${variable}`
+```bash
+curl -X POST '${host}/users' \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "${name}", "email": "${email}", "age": ${age}}'
+```
+
+**Simple-style**: `{variable}`
+```bash
+curl -X POST '{host}/users' \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "{name}", "email": "{email}", "age": {age}}'
 ```
 
 #### Supported Features
@@ -60,12 +75,30 @@ curl -X POST '{{host}}/users' \
   - Numeric fields are unquoted: `"age": {{age}}`
   - Boolean fields are unquoted: `"active": {{active}}`
 
-#### Output Formats
+#### Rendering Options
+
+**Convenience Methods**:
+```scala
+// Mustache-style (default)
+curlTemplate.renderMustache(indent = true)
+
+// Shell-style
+curlTemplate.renderShell(indent = true)
+
+// Simple-style
+curlTemplate.renderSimple(indent = true)
+```
+
+**Generic Method**:
+```scala
+import com.example.smithy4s.extras.TemplateStyle
+
+curlTemplate.render(TemplateStyle.Mustache, indent = true)
+curlTemplate.render(TemplateStyle.Shell, indent = false)
+curlTemplate.render(TemplateStyle.Simple, indent = true)
+```
 
 **Indented** (default):
-```scala
-curlTemplate.render(indent = true)
-```
 ```bash
 curl \
   -X POST \
@@ -74,10 +107,7 @@ curl \
   -d '{"name": "{{name}}", "email": "{{email}}"}'
 ```
 
-**Compact**:
-```scala
-curlTemplate.render(indent = false)
-```
+**Compact** (`indent = false`):
 ```bash
 curl -X POST '{{host}}/users' -H 'Content-Type: application/json' -d '{"name": "{{name}}", "email": "{{email}}"}'
 ```

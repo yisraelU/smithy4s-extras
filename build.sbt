@@ -11,6 +11,8 @@ lazy val root = (project in file("."))
       "com.disneystreaming.smithy4s" %% "smithy4s-http4s" % smithy4sVersion.value,
       "com.disneystreaming.smithy4s" %% "smithy4s-http4s-swagger" % smithy4sVersion.value,
       "org.http4s" %% "http4s-ember-server" % "0.23.33",
-      "org.http4s" %% "http4s-ember-client" % "0.23.33"
-    )
+      "org.http4s" %% "http4s-ember-client" % "0.23.33",
+      "org.scalameta" %% "munit" % "1.0.3" % Test
+    ),
+    testFrameworks += new TestFramework("munit.Framework")
   )

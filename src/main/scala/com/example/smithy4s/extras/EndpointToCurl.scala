@@ -24,11 +24,6 @@ object EndpointToCurl {
       // Build the path with templated path parameters
       val path = buildTemplatedPath(uriPattern, inputAnalysis.pathParams)
 
-      // Build headers
-      val headers = buildHeaders(inputAnalysis.headers, httpMetadata)
-
-      // Build query parameters
-      val queryParams = buildQueryParams(inputAnalysis.queryParams)
 
       // Build body if applicable
       val body = buildBody(method, inputAnalysis.bodyFields, inputSchema)
@@ -36,8 +31,8 @@ object EndpointToCurl {
       CurlTemplate(
         method = method,
         path = path,
-        headers = headers,
-        queryParams = queryParams,
+        headers = inputAnalysis.headers,
+        queryParams = inputAnalysis.queryParams,
         body = body
       )
     }
@@ -47,8 +42,8 @@ object EndpointToCurl {
 
   private case class InputAnalysis(
     pathParams: Set[String],
-    queryParams: Map[String, String],
-    headers: Map[String, String],
+    queryParams: IndexedSeq[(String, String)],  // (paramName, fieldName) - supports duplicates and preserves order
+    headers: IndexedSeq[(String, String)],      // (headerName, fieldName)
     bodyFields: List[String]
   )
 
@@ -66,8 +61,8 @@ object EndpointToCurl {
     schema match {
       case struct: StructSchema[A] =>
         val pathParams = scala.collection.mutable.Set.empty[String]
-        val queryParams = scala.collection.mutable.Map.empty[String, String]
-        val headers = scala.collection.mutable.Map.empty[String, String]
+        val queryParams = scala.collection.mutable.ListBuffer.empty[(String, String)]
+        val headers = scala.collection.mutable.ListBuffer.empty[(String, String)]
         val bodyFields = scala.collection.mutable.ListBuffer.empty[String]
 
         struct.fields.foreach { field =>
@@ -81,12 +76,12 @@ object EndpointToCurl {
           // Check for HTTP query parameter
           else if (hints.has(smithy.api.HttpQuery)) {
             val queryName = hints.get(smithy.api.HttpQuery).map(_.value).getOrElse(fieldName)
-            queryParams += (queryName -> fieldName)
+            queryParams += ((queryName, fieldName))
           }
           // Check for HTTP header
           else if (hints.has(smithy.api.HttpHeader)) {
             val headerName = hints.get(smithy.api.HttpHeader).map(_.value).getOrElse(fieldName)
-            headers += (headerName -> fieldName)
+            headers += ((headerName, fieldName))
           }
           // Otherwise, it's part of the body
           else {
@@ -96,8 +91,8 @@ object EndpointToCurl {
 
         InputAnalysis(
           pathParams = pathParams.toSet,
-          queryParams = queryParams.toMap,
-          headers = headers.toMap,
+          queryParams = queryParams.toIndexedSeq,
+          headers = headers.toIndexedSeq,
           bodyFields = bodyFields.toList
         )
 
@@ -105,8 +100,8 @@ object EndpointToCurl {
         // Non-struct schemas are treated as body payload
         InputAnalysis(
           pathParams = Set.empty,
-          queryParams = Map.empty,
-          headers = Map.empty,
+          queryParams = IndexedSeq.empty,
+          headers = IndexedSeq.empty,
           bodyFields = List.empty
         )
     }
@@ -116,39 +111,11 @@ object EndpointToCurl {
     // Replace {param} with {{param}} in the URI pattern
     var path = uriPattern
     pathParams.foreach { param =>
-      path = path.replace(s"{$param}", s"{{{{$param}}}}")
+      path = path.replace(s"{$param}", s"{{$param}}")
     }
     path
   }
 
-  private def buildHeaders(
-    schemaHeaders: Map[String, String],
-    httpMetadata: HttpMetadata
-  ): Map[String, String] = {
-    val headers = scala.collection.mutable.Map.empty[String, String]
-
-    // Add schema-defined headers
-    schemaHeaders.foreach { case (headerName, fieldName) =>
-      headers += (headerName -> s"{{{{$fieldName}}}}")
-    }
-
-    // Add Content-Type for methods with bodies
-    if (httpMetadata.method == "POST" ||
-        httpMetadata.method == "PUT" ||
-        httpMetadata.method == "PATCH") {
-      if (!headers.contains("Content-Type")) {
-        headers += ("Content-Type" -> "application/json")
-      }
-    }
-
-    headers.toMap
-  }
-
-  private def buildQueryParams(queryParams: Map[String, String]): List[String] = {
-    queryParams.map { case (queryName, fieldName) =>
-      s"$queryName={{{{$fieldName}}}}"
-    }.toList.sorted
-  }
 
   private def buildBody[A](
     method: String,
@@ -185,20 +152,25 @@ object EndpointToCurl {
       case s => s
     }
 
+    // Use explicit brace concatenation to avoid escaping issues
+    val openBrace = "{"
+    val closeBrace = "}"
+    val template = s"$openBrace$openBrace$fieldName$closeBrace$closeBrace"
+
     unwrapped match {
       case _: PrimitiveSchema[_] =>
         unwrapped.shapeId.name match {
-          case "String" | "Timestamp" | "Blob" => s""""{{{{$fieldName}}}}""""
+          case "String" | "Timestamp" | "Blob" => s""""$template""""
           case "Integer" | "Long" | "Short" | "Byte" | "Double" | "Float" | "BigInteger" | "BigDecimal" =>
-            s"{{{{$fieldName}}}}"
-          case "Boolean" => s"{{{{$fieldName}}}}"
-          case _ => s""""{{{{$fieldName}}}}""""
+            template
+          case "Boolean" => template
+          case _ => s""""$template""""
         }
-      case _: CollectionSchema[_, _] => s"{{{{$fieldName}}}}"
-      case _: MapSchema[_, _] => s"{{{{$fieldName}}}}"
-      case _: StructSchema[_] => s"{{{{$fieldName}}}}"
-      case _: UnionSchema[_] => s"{{{{$fieldName}}}}"
-      case _ => s""""{{{{$fieldName}}}}""""
+      case _: CollectionSchema[_, _] => template
+      case _: MapSchema[_, _] => template
+      case _: StructSchema[_] => template
+      case _: UnionSchema[_] => template
+      case _ => s""""$template""""
     }
   }
 }

@@ -27,11 +27,24 @@ object Main extends App {
     println("-" * 60 + "\n")
   }
 
-  println("\n=== Compact Format Example ===\n")
-  // Show compact format for one endpoint
-  ApiService.service.endpoints.headOption.foreach { endpoint =>
+  println("\n=== Template Style Examples ===\n")
+  // Show different template styles for one endpoint
+  ApiService.service.endpoints.find(_.name == "CreateUser").foreach { endpoint =>
     EndpointToCurl.toCurl(endpoint).foreach { curlTemplate =>
-      println(curlTemplate.render(indent = false))
+      println("Mustache Style ({{variable}}):")
+      println(curlTemplate.renderMustache(indent = true))
+      println()
+
+      println("Shell Style (${variable}):")
+      println(curlTemplate.renderShell(indent = true))
+      println()
+
+      println("Simple Style ({variable}):")
+      println(curlTemplate.renderSimple(indent = true))
+      println()
+
+      println("Compact Mustache:")
+      println(curlTemplate.renderMustache(indent = false))
     }
   }
 }
