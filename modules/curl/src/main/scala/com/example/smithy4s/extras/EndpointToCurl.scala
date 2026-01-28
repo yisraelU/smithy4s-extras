@@ -1,8 +1,6 @@
 package com.example.smithy4s.extras
 
-import smithy4s.Endpoint
-import smithy4s.Hints
-import smithy4s.Schema
+import smithy4s.{Endpoint, Hints, Schema}
 import smithy4s.schema.Schema._
 
 /** Converts smithy4s endpoints to templated curl commands */

@@ -1,6 +1,6 @@
 package com.example
 
-import com.example.smithy4s.extras.{EndpointToCurl, TemplateStyle}
+import com.example.smithy4s.extras.EndpointToCurl
 import comprehensive.ApiService
 
 object TemplateDemo extends App {
