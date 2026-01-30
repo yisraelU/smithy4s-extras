@@ -17,14 +17,14 @@ object EndpointToCurl {
       val uriPattern = httpMetadata.uri
 
       // Analyze the input schema
-      val inputAnalysis = analyzeInput(inputSchema, uriPattern)
+      val inputAnalysis = analyzeInput(inputSchema).getOrElse(InputAnalysis.empty)
 
       // Build the path with templated path parameters
       val path = buildTemplatedPath(uriPattern, inputAnalysis.pathParams)
 
 
       // Build body if applicable
-      val body = buildBody(method, inputAnalysis.bodyFields, inputSchema)
+      val body = buildBody(method, inputAnalysis.bodyFields)
 
       CurlTemplate(
         method = method,
@@ -38,12 +38,30 @@ object EndpointToCurl {
 
   private case class HttpMetadata(method: String, uri: String, code: Int)
 
-  private case class InputAnalysis(
-    pathParams: Set[String],
-    queryParams: IndexedSeq[(String, String)],  // (paramName, fieldName) - supports duplicates and preserves order
-    headers: IndexedSeq[(String, String)],      // (headerName, fieldName)
-    bodyFields: List[String]
-  )
+  sealed trait FieldType
+  object FieldType {
+    case object StringType extends FieldType
+    case object NumberType extends FieldType
+    case object BooleanType extends FieldType
+    case class ObjectType(fields: IndexedSeq[(String, FieldType)]) extends FieldType
+    case class ArrayType(element: FieldType) extends FieldType
+  }
+
+  case class InputAnalysis(
+                            pathParams: Set[String],
+                            queryParams: IndexedSeq[(String, String)], // (paramName, fieldName) - supports duplicates and preserves order
+                            headers: IndexedSeq[(String, String)], // (headerName, fieldName)
+                            bodyFields: IndexedSeq[(String, FieldType)] // (fieldName, fieldType)
+                          )
+
+  object InputAnalysis {
+    val empty = InputAnalysis(
+      pathParams = Set.empty,
+      queryParams = IndexedSeq.empty,
+      headers = IndexedSeq.empty,
+      bodyFields = IndexedSeq.empty
+    )
+  }
 
   private def extractHttpMetadata(hints: Hints): Option[HttpMetadata] = {
     hints.get(smithy.api.Http).map { http =>
@@ -55,120 +73,136 @@ object EndpointToCurl {
     }
   }
 
-  private def analyzeInput[A](schema: Schema[A], uriPattern: String): InputAnalysis = {
-    schema match {
-      case struct: StructSchema[A] =>
-        val pathParams = scala.collection.mutable.Set.empty[String]
-        val queryParams = scala.collection.mutable.ListBuffer.empty[(String, String)]
-        val headers = scala.collection.mutable.ListBuffer.empty[(String, String)]
-        val bodyFields = scala.collection.mutable.ListBuffer.empty[String]
+  private type Result[A] = Option[InputAnalysis]
 
-        struct.fields.foreach { field =>
-          val fieldName = field.label
-          val hints = field.hints
-
-          // Check for HTTP label (path parameter)
-          if (hints.has(smithy.api.HttpLabel)) {
-            pathParams += fieldName
-          }
-          // Check for HTTP query parameter
-          else if (hints.has(smithy.api.HttpQuery)) {
-            val queryName = hints.get(smithy.api.HttpQuery).map(_.value).getOrElse(fieldName)
-            queryParams += ((queryName, fieldName))
-          }
-          // Check for HTTP header
-          else if (hints.has(smithy.api.HttpHeader)) {
-            val headerName = hints.get(smithy.api.HttpHeader).map(_.value).getOrElse(fieldName)
-            headers += ((headerName, fieldName))
-          }
-          // Otherwise, it's part of the body
-          else {
-            bodyFields += fieldName
-          }
-        }
-
-        InputAnalysis(
-          pathParams = pathParams.toSet,
-          queryParams = queryParams.toIndexedSeq,
-          headers = headers.toIndexedSeq,
-          bodyFields = bodyFields.toList
-        )
-
-      case _ =>
-        // Non-struct schemas are treated as body payload
-        InputAnalysis(
-          pathParams = Set.empty,
-          queryParams = IndexedSeq.empty,
-          headers = IndexedSeq.empty,
-          bodyFields = List.empty
-        )
+  private def schemaToFieldType[A](schema: Schema[A]): FieldType = {
+    // Unwrap optional fields to get the underlying type
+    val unwrapped = schema match {
+      case opt: OptionSchema[_] => opt.underlying
+      case s => s
     }
+
+    type Const[T] = FieldType
+
+    unwrapped.compile(new smithy4s.schema.SchemaVisitor.Default[Const] {
+      override def default[T]: Const[T] = FieldType.ObjectType(IndexedSeq.empty)
+
+      override def primitive[P](shapeId: smithy4s.ShapeId, hints: Hints, tag: smithy4s.schema.Primitive[P]): Const[P] = {
+        shapeId.name match {
+          case "String" | "Timestamp" | "Blob" => FieldType.StringType
+          case "Integer" | "Long" | "Short" | "Byte" | "Double" | "Float" | "BigInteger" | "BigDecimal" =>
+            FieldType.NumberType
+          case "Boolean" => FieldType.BooleanType
+          case _ => FieldType.StringType
+        }
+      }
+
+      override def collection[C[_], A](shapeId: smithy4s.ShapeId, hints: Hints, tag: smithy4s.schema.CollectionTag[C], member: Schema[A]): Const[C[A]] = {
+        val elementType = schemaToFieldType(member)
+        FieldType.ArrayType(elementType)
+      }
+
+      override def map[K, V](shapeId: smithy4s.ShapeId, hints: Hints, key: Schema[K], value: Schema[V]): Const[Map[K, V]] =
+        FieldType.ObjectType(IndexedSeq.empty)
+
+      override def struct[S](shapeId: smithy4s.ShapeId, hints: Hints, fields: Vector[smithy4s.schema.Field[S, _]], make: IndexedSeq[Any] => S): Const[S] = {
+        val fieldTypes = fields.map { field =>
+          (field.label, schemaToFieldType(field.schema))
+        }
+        FieldType.ObjectType(fieldTypes)
+      }
+
+      override def union[U](shapeId: smithy4s.ShapeId, hints: Hints, alternatives: Vector[smithy4s.schema.Alt[U, _]], dispatch: smithy4s.schema.Alt.Dispatcher[U]): Const[U] =
+        FieldType.ObjectType(IndexedSeq.empty)
+    })
+  }
+
+  private def analyzeInput[A](schema: Schema[A]): Result[A] = {
+
+
+    schema.compile(new smithy4s.schema.SchemaVisitor.Default[Result] {
+      // Default case: Non-struct schemas are treated as body payload
+      override def default[T]: Result[T] = None
+
+      override def struct[S](shapeId: smithy4s.ShapeId, hints: Hints, fields: Vector[smithy4s.schema.Field[S, _]], make: IndexedSeq[Any] => S): Result[S] = {
+        Some(
+          fields.foldLeft(InputAnalysis.empty) { (acc, field) =>
+            val fieldName = field.label
+            val hints = field.hints
+
+            // Check for HTTP label (path parameter)
+            if (hints.has(smithy.api.HttpLabel)) {
+              acc.copy(pathParams = acc.pathParams + fieldName)
+            }
+            // Check for HTTP query parameter
+            else if (hints.has(smithy.api.HttpQuery)) {
+              val queryName = hints.get(smithy.api.HttpQuery).map(_.value).getOrElse(fieldName)
+              acc.copy(queryParams = acc.queryParams :+ ((queryName, fieldName)))
+            }
+            // Check for HTTP header
+            else if (hints.has(smithy.api.HttpHeader)) {
+              val headerName = hints.get(smithy.api.HttpHeader).map(_.value).getOrElse(fieldName)
+              acc.copy(headers = acc.headers :+ ((headerName, fieldName)))
+            }
+            // Otherwise, it's part of the body
+            else {
+              val fieldType = schemaToFieldType(field.schema)
+              acc.copy(bodyFields = acc.bodyFields :+ ((fieldName, fieldType)))
+            }
+          }
+        )
+      }
+    })
   }
 
   private def buildTemplatedPath(uriPattern: String, pathParams: Set[String]): String = {
     // Replace {param} with {{param}} in the URI pattern
-    var path = uriPattern
-    pathParams.foreach { param =>
-      path = path.replace(s"{$param}", s"{{$param}}")
+    pathParams.foldLeft(uriPattern) { (path, param) =>
+      path.replace(s"{$param}", s"{{$param}}")
     }
-    path
   }
 
 
-  private def buildBody[A](
-    method: String,
-    bodyFields: List[String],
-    schema: Schema[A]
-  ): Option[String] = {
+  private def buildBody(
+                         method: String,
+                         bodyFields: IndexedSeq[(String, FieldType)]
+                       ): Option[String] = {
     // Only include body for methods that typically have one
     val hasBody = method == "POST" || method == "PUT" || method == "PATCH"
 
     if (hasBody && bodyFields.nonEmpty) {
-      schema match {
-        case struct: StructSchema[A] =>
-          // Generate JSON template with proper typing hints
-          val fields = struct.fields.collect {
-            case field if bodyFields.contains(field.label) =>
-              val fieldName = field.label
-              val value = formatFieldValue(field.schema, fieldName)
-              s""""$fieldName": $value"""
-          }.mkString(", ")
-          Some(s"{$fields}")
-        case _ =>
-          // For non-struct schemas, treat as raw template
-          Some(s"{{{{body}}}}")
-      }
+      // Generate JSON template with proper typing hints
+      val fields = bodyFields.map { case (fieldName, fieldType) =>
+        val value = formatFieldValue(fieldName, fieldType)
+        s""""$fieldName": $value"""
+      }.mkString(", ")
+      Some(s"{$fields}")
     } else {
       None
     }
   }
 
-  private def formatFieldValue[A](fieldSchema: Schema[A], fieldName: String): String = {
-    // Unwrap optional fields to get the underlying type
-    val unwrapped = fieldSchema match {
-      case opt: OptionSchema[_] => opt.underlying
-      case s => s
-    }
-
+  private def formatFieldValue(fieldName: String, fieldType: FieldType): String = {
     // Use explicit brace concatenation to avoid escaping issues
     val openBrace = "{"
     val closeBrace = "}"
     val template = s"$openBrace$openBrace$fieldName$closeBrace$closeBrace"
 
-    unwrapped match {
-      case _: PrimitiveSchema[_] =>
-        unwrapped.shapeId.name match {
-          case "String" | "Timestamp" | "Blob" => s""""$template""""
-          case "Integer" | "Long" | "Short" | "Byte" | "Double" | "Float" | "BigInteger" | "BigDecimal" =>
-            template
-          case "Boolean" => template
-          case _ => s""""$template""""
+    fieldType match {
+      case FieldType.StringType => s""""$template""""
+      case FieldType.NumberType => template
+      case FieldType.BooleanType => template
+      case FieldType.ObjectType(fields) =>
+        if (fields.isEmpty) {
+          template
+        } else {
+          val formattedFields = fields.map { case (name, typ) =>
+            s""""$name": ${formatFieldValue(name, typ)}"""
+          }.mkString(", ")
+          s"{$formattedFields}"
         }
-      case _: CollectionSchema[_, _] => template
-      case _: MapSchema[_, _] => template
-      case _: StructSchema[_] => template
-      case _: UnionSchema[_] => template
-      case _ => s""""$template""""
+      case FieldType.ArrayType(element) =>
+        s"[${formatFieldValue("item", element)}]"
     }
   }
 }

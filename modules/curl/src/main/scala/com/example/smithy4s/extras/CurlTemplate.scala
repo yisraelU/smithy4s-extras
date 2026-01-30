@@ -2,12 +2,12 @@ package com.example.smithy4s.extras
 
 /** Represents a templated curl command */
 case class CurlTemplate(
-  method: String,
-  path: String,
-  headers: IndexedSeq[(String, String)] = IndexedSeq.empty,  // (headerName, fieldName)
-  queryParams: IndexedSeq[(String, String)] = IndexedSeq.empty,  // (paramName, fieldName)
-  body: Option[String] = None
-) {
+                         method: String,
+                         path: String,
+                         headers: IndexedSeq[(String, String)] = IndexedSeq.empty, // (headerName, fieldName)
+                         queryParams: IndexedSeq[(String, String)] = IndexedSeq.empty, // (paramName, fieldName)
+                         body: Option[String] = None
+                       ) {
 
   /** Render using Mustache-style {{variable}} syntax */
   def renderMustache(indent: Boolean = true): String =

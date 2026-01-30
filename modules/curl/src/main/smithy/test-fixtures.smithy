@@ -13,6 +13,10 @@ service TestService {
         QueryParamsOnly
         MixedParams
         PostWithOptionalFields
+        PostWithNestedObject
+        PostWithDeeplyNestedObject
+        PostWithNestedArray
+        PostWithComplexNesting
     ]
 }
 
@@ -135,4 +139,188 @@ structure PostWithOptionalFieldsOutput {
 
 list StringList {
     member: String
+}
+
+// POST with single-level nested object
+@http(method: "POST", uri: "/users", code: 201)
+operation PostWithNestedObject {
+    input: PostWithNestedObjectInput
+    output: PostWithNestedObjectOutput
+}
+
+structure PostWithNestedObjectInput {
+    @required
+    name: String
+
+    @required
+    address: Address
+}
+
+structure Address {
+    @required
+    street: String
+
+    @required
+    city: String
+
+    country: String
+
+    zipCode: String
+}
+
+structure PostWithNestedObjectOutput {
+    id: String
+}
+
+// POST with deeply nested objects (3+ levels)
+@http(method: "POST", uri: "/organizations", code: 201)
+operation PostWithDeeplyNestedObject {
+    input: PostWithDeeplyNestedObjectInput
+    output: PostWithDeeplyNestedObjectOutput
+}
+
+structure PostWithDeeplyNestedObjectInput {
+    @required
+    name: String
+
+    @required
+    headquarters: Office
+}
+
+structure Office {
+    @required
+    location: Location
+
+    phoneNumber: String
+}
+
+structure Location {
+    @required
+    address: Address
+
+    coordinates: Coordinates
+}
+
+structure Coordinates {
+    @required
+    latitude: Double
+
+    @required
+    longitude: Double
+}
+
+structure PostWithDeeplyNestedObjectOutput {
+    id: String
+}
+
+// POST with nested arrays
+@http(method: "POST", uri: "/projects", code: 201)
+operation PostWithNestedArray {
+    input: PostWithNestedArrayInput
+    output: PostWithNestedArrayOutput
+}
+
+structure PostWithNestedArrayInput {
+    @required
+    name: String
+
+    @required
+    members: MemberList
+
+    tags: StringList
+}
+
+structure Member {
+    @required
+    userId: String
+
+    @required
+    role: String
+
+    permissions: StringList
+}
+
+list MemberList {
+    member: Member
+}
+
+structure PostWithNestedArrayOutput {
+    id: String
+}
+
+// POST with complex nesting (mix of objects, arrays, and primitives)
+@http(method: "POST", uri: "/orders", code: 201)
+operation PostWithComplexNesting {
+    input: PostWithComplexNestingInput
+    output: PostWithComplexNestingOutput
+}
+
+structure PostWithComplexNestingInput {
+    @required
+    customer: Customer
+
+    @required
+    items: OrderItemList
+
+    @required
+    shippingAddress: Address
+
+    billingAddress: Address
+
+    metadata: OrderMetadata
+}
+
+structure Customer {
+    @required
+    id: String
+
+    @required
+    name: String
+
+    email: String
+
+    preferences: CustomerPreferences
+}
+
+structure CustomerPreferences {
+    newsletter: Boolean
+
+    notifications: NotificationSettings
+}
+
+structure NotificationSettings {
+    email: Boolean
+
+    sms: Boolean
+
+    push: Boolean
+}
+
+structure OrderItem {
+    @required
+    productId: String
+
+    @required
+    quantity: Integer
+
+    @required
+    price: Double
+
+    options: StringList
+}
+
+list OrderItemList {
+    member: OrderItem
+}
+
+structure OrderMetadata {
+    source: String
+
+    campaign: String
+
+    tags: StringList
+}
+
+structure PostWithComplexNestingOutput {
+    orderId: String
 }
